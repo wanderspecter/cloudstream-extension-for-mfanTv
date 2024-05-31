@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
+import org.json.JSONObject
 
 class MengAnime : MainAPI() {
     override var mainUrl = "https://www.mfan.tv"
@@ -128,13 +129,13 @@ class MengAnime : MainAPI() {
             "${it.scheme}://${it.host}"
         }
     }
-
-    private fun getSourceType(url: String): String {
-        return when {
-            url.contains("cache", true) -> "Cache"
-            url.contains("allanime", true) -> "Crunchyroll-AL"
-            else -> Regex("\\.(\\S+)\\.").find(url)?.groupValues?.getOrNull(1)?.let { fixTitle(it) } ?: this.name
-        }
+    private suspend fun fetchAndParseApiData(): String {
+        val url = "https://v1.hitokoto.cn/?c=a"
+        val response = app.get(url).text
+        val jsonObject = JSONObject(response)
+        val hitokoto = jsonObject.getString("hitokoto")
+        val from = jsonObject.getString("from")
+        return "$hitokoto From: $from"
     }
     override suspend fun getLoadUrl(name: SyncIdName, id: String): String? {
         val url = "${mainUrl}${id}"
@@ -156,11 +157,11 @@ class MengAnime : MainAPI() {
             // 检查源是否为 MP4 格式
             if (source.endsWith(".mp4")) {
                 // 如果是 MP4 格式，直接通过回调函数返回
-                callback(ExtractorLink(getSourceType(getBaseUrl(source)), "", source, "", 0))
+                callback(ExtractorLink("Mp4", fetchAndParseApiData(), source, "", 0))
             } else if (source.endsWith(".m3u8")) {
                 // 生成 M3U8 链接，并通过回调函数返回
                 M3u8Helper.generateM3u8(
-                    "${getSourceType(getBaseUrl(source))}",
+                    fetchAndParseApiData(),
                     source,
                     ""
                 ).forEach(callback)
