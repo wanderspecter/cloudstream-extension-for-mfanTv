@@ -1,17 +1,15 @@
 package com.hexated
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.syncproviders.SyncIdName
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
+import org.json.JSONException
+import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
-import org.json.JSONObject
+
 
 class MengAnime : MainAPI() {
     override var mainUrl = "https://www.mfan.tv"
@@ -19,6 +17,9 @@ class MengAnime : MainAPI() {
     override val hasMainPage = true
     override var lang = "zh"
     override val hasDownloadSupport = true
+
+    private var type = "Movie"
+    private var status = "Finished Airing"
 
     override val supportedSyncNames = setOf(
         SyncIdName.Anilist,
@@ -32,22 +33,24 @@ class MengAnime : MainAPI() {
 
     companion object {
         fun getType(t: String): TvType {
-            return if(t.contains("日语", true)) TvType.Anime
-            else TvType.TvSeries
+            return if (t.contains("OVA", true) || t.contains("Special", true)) TvType.OVA
+            else if (t.contains("Movie", true)) TvType.AnimeMovie
+            else TvType.Anime
         }
 
         fun getStatus(t: String): ShowStatus {
             return when (t) {
-                "已完结" -> ShowStatus.Completed
-                else -> ShowStatus.Ongoing
+                "Finished Airing" -> ShowStatus.Completed
+                "Currently Airing" -> ShowStatus.Ongoing
+                else -> ShowStatus.Completed
             }
         }
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/type/20/page/" to "新番",
-        "$mainUrl/type/21/page/" to "番剧",
-        "$mainUrl/type/22/page/" to "剧场",
+        "$mainUrl/type/20/by/time/page/" to "新番",
+        "$mainUrl/type/21/by/hits/page/" to "番剧",
+        "$mainUrl/type/22/by/hits/page/" to "剧场",
     )
 
     override suspend fun getMainPage(
@@ -67,12 +70,12 @@ class MengAnime : MainAPI() {
         val title = this.attr("title").ifBlank { return null }
         val href = this.attr("href").ifBlank { return null }
         val posterUrl = this.attr("data-original").ifBlank { return null }
-        val status = this.select(".state").text()
-        val epNum =
-            this.select(".hl-pic-text").select(".hl-lc-1 remarks").text().filter { it.isDigit() }.toIntOrNull()
-        return newAnimeSearchResponse(title, href, TvType.Anime) {
+        val epNum = this.select("div.hl-pic-text span").text().filter { it.isDigit() }.toIntOrNull()
+        return if (epNum == null) newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
-            addDubStatus(status, epNum)
+        } else newAnimeSearchResponse(title, href, TvType.Anime) {
+            this.posterUrl = posterUrl
+            this.addDubStatus(dubExist = false, subExist = true, dubEpisodes = epNum, subEpisodes = epNum)
         }
     }
 
@@ -82,28 +85,42 @@ class MengAnime : MainAPI() {
             it.toSearchResult()
         }
     }
+
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-
         val title = document.selectFirst("span.hl-item-thumb")?.attr("title") ?: return null
+        val realName = getAnimeDetail(title)
         val poster = document.selectFirst("span.hl-item-thumb")?.attr("data-original") ?: return null
         val description = document.selectFirst(".hl-content-text")?.text()?: return null
-        val status = getStatus(document.selectFirst("#conch-content > div.conch-ctwrap-auto > div > div.container > div > div.hl-col-xs-12.hl-col-md-70w.hl-col-lg-9 > div > div.hl-dc-content > div.hl-vod-data.hl-full-items > div.hl-data-sm.hl-full-alert.hl-full-x100 > div.hl-full-box.clearfix > ul > li:nth-child(2) > span").text())?:return null
-        val type = getType(document.selectFirst("#conch-content > div.conch-ctwrap-auto > div > div.container > div > div.hl-col-xs-12.hl-col-md-70w.hl-col-lg-9 > div > div.hl-dc-content > div.hl-vod-data.hl-full-items > div.hl-data-sm.hl-full-alert.hl-full-x100 > div.hl-full-box.clearfix > ul > li:nth-child(10)").text())?:return null
+
+        val status = getStatus(status)
+        val type = getType(type)
         val tags = document.select("li.hl-col-xs-12").drop(1).dropLast(1).map {
             it.text().trim().trimEnd('/').replace("//+".toRegex(), "/")
         }
         val episodes = mutableListOf<Episode>()
-        //获取剧集的个数
-        val num = document.select("ul.hl-plays-list li")?.size
+        // 获取剧集的个数
+        // val num = document.select("ul.hl-plays-list li")?.size
         document.select("ul.hl-plays-list li")?.forEach {
-            val epsTitle = it.select("a").text()
-            val link = fixUrl(it.select("a").attr("href"))
-            val episode = epsTitle.substringBefore(":").filter { it.isDigit() }.toIntOrNull()
-            episodes.add(Episode(link, name = epsTitle.substringAfter(":").trim(), episode = episode))
+            val name = it.select("a").text()
+            var epsTitle = name
+            var link = fixUrl(it.select("a").attr("href"))
+            when {
+                name.matches("\\d+".toRegex()) -> {
+                    // 纯数字的情况
+                    epsTitle = "第${name}集"
+                }
+                else -> {
+                    // 其他情况
+                    epsTitle = name
+                    link = fixUrl(it.select("a").attr("href"))
+                }
+            }
+            // val episode = epsTitle.substringBefore(":").filter { it.isDigit() }.toIntOrNull()
+            episodes.add(Episode(link, name = epsTitle.substringAfter(":").trim()))
         }
-        return newAnimeLoadResponse(title, url, type) {
-            engName = title
+        return newAnimeLoadResponse(realName?:title, url, type) {
+            engName = realName
             posterUrl = poster
             addEpisodes(DubStatus.Subbed, episodes)
             showStatus = status
@@ -135,11 +152,37 @@ class MengAnime : MainAPI() {
         val jsonObject = JSONObject(response)
         val hitokoto = jsonObject.getString("hitokoto")
         val from = jsonObject.getString("from")
-        return "$hitokoto From: $from"
+        return "$hitokoto  $from "
     }
-    override suspend fun getLoadUrl(name: SyncIdName, id: String): String? {
-        val url = "${mainUrl}${id}"
-        return url
+
+    private suspend fun getAnimeDetail(title: String): String {
+        val Bangumi = "https://api.bgm.tv/search/subject/$title?type=2&responseGroup=small&max_results=1"
+        var response = app.get(Bangumi).text
+        var jsonObject: JSONObject? = null
+        var name: String = title
+        try {
+            jsonObject = JSONObject(response)
+            name = jsonObject.getJSONArray("list").getJSONObject(0).getString("name")
+        } catch (e: JSONException) {
+            return title
+        }
+        val jikan = "https://api.jikan.moe/v4/anime?q=${name}&limit=1"
+        response = app.get(jikan).text
+        try {
+            jsonObject = JSONObject(response)
+            type = jsonObject.getJSONArray("data").getJSONObject(0).getString("type")
+            status = jsonObject.getJSONArray("data").getJSONObject(0).getString("status")
+            val titles = jsonObject.getJSONArray("data").getJSONObject(0).getJSONArray("titles")
+            for (i in 0 until titles.length()) {
+                val obj = titles.getJSONObject(i)
+                if (obj.getString("type") == "English") {
+                    return obj.getString("title")
+                }
+            }
+        } catch (e: JSONException) {
+            return name
+        }
+        return name
     }
     // 重写 loadLinks 函数，该函数用于加载视频链接
     override suspend fun loadLinks(
@@ -150,22 +193,32 @@ class MengAnime : MainAPI() {
     ): Boolean {
         listOf(data).apmap { url ->
             val doc = app.get(url).document
-            val jsonString = doc.selectFirst("#conch-content > div.conch-ctwrap-auto > div > div > div.hl-col-xs-12.hl-col-md-70w.hl-col-lg-9 > div > script:nth-child(2)")?.data()?: return@apmap null
+            val jsonString = doc.selectFirst("div.hl-player-wrap > script:nth-child(2)")?.data()?: return@apmap null
             val pattern = """"url":"(.*?)"""".toRegex()
             val matchResult = pattern.find(jsonString)
-            val source = matchResult?.groups?.get(1)?.value?.replace("\\", "")?: return@apmap null
+            var source = matchResult?.groups?.get(1)?.value?.replace("\\", "")?: return@apmap null
             // 检查源是否为 MP4 格式
-            if (source.endsWith(".mp4")) {
+            if (source.endsWith(".png?.mp4")) {
+                source = source.replace(".png?.mp4", ".png")
+                callback(ExtractorLink(url, fetchAndParseApiData(), source, url, 0, false))
+            } else if (source.endsWith(".mp4")) {
                 // 如果是 MP4 格式，直接通过回调函数返回
-                callback(ExtractorLink("Mp4", fetchAndParseApiData(), source, "", 0))
+                callback(ExtractorLink(url, fetchAndParseApiData(), source, url, 0, false))
             } else if (source.endsWith(".m3u8")) {
                 // 生成 M3U8 链接，并通过回调函数返回
                 M3u8Helper.generateM3u8(
                     fetchAndParseApiData(),
                     source,
-                    ""
+                    "https://video1.beijcloud.com"
                 ).forEach(callback)
-            } else return@apmap null
+            } else {
+                val iframeSrc = "https://video1.beijcloud.com/player/?url=$source"
+                val iframeDoc = app.get(iframeSrc, referer = url).document.data()
+                val p = """url:\s*'([^']*)'""".toRegex()
+                val res = p.find(iframeDoc)
+                source = res?.groups?.get(1)?.value?.replace(".png?.mp4", ".png")?: return@apmap null
+                callback(ExtractorLink(url, fetchAndParseApiData(), source, url, 0, false))
+            }
         }
         // 返回 true，表示加载链接成功
         return true

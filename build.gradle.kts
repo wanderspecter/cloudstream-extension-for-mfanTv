@@ -43,7 +43,7 @@ subprojects {
 
     android {
         defaultConfig {
-            minSdk = 21
+            minSdk = 26
             compileSdkVersion(33)
             targetSdk = 33
         }
@@ -83,7 +83,6 @@ subprojects {
         implementation("io.karn:khttp-android:0.1.2")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
         implementation("org.mozilla:rhino:1.7.14") //run JS
-
     }
 }
 

@@ -6,7 +6,7 @@ cloudstream {
     language = "zh"
     // All of these properties are optional, you can safely remove them
     // description = "Lorem Ipsum"
-     authors = listOf("wander-specter")
+    authors = listOf("wander-specter")
     /**
      * Status int as the following:
      * 0: Down
@@ -19,5 +19,5 @@ cloudstream {
         "AnimeMovie",
         "Anime",
     )
-    iconUrl = "https://tncache1-f1.v3mh.com/image/23-08-03/kimTC3UN3.png"
+    iconUrl = "https://2rk.cc/logo.png"
 }
